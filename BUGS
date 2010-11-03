@@ -1,0 +1,6 @@
+stunnel         Universal SSL tunnel
+
+KNOWN BUGS
+
+- Shared library to be LD_PRELOADed does not support IPv6.
+
