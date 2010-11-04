@@ -509,6 +509,9 @@ time to keep an idle connection
 .IP "\fBtransparent\fR = yes | no (Unix only)" 4
 .IX Item "transparent = yes | no (Unix only)"
 transparent proxy mode
+.IP "\fBxforwardedproto\fR = yes | no" 4
+.IX Item "xforwardedproto = yes | no"
+append an 'X-Forwarded-Proto: https' HTTP request header.
 .Sp
 Re-write address to appear as if wrapped daemon is connecting
 from the \s-1SSL\s0 client machine instead of the machine running \fBstunnel\fR.

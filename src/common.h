@@ -53,6 +53,10 @@
 /* I/O buffer size */
 #define BUFFSIZE 16384
 
+/* maximum space reserved for header insertion in BUFFSIZE */
+/* currently only the fixed 'X-Forwarded-Proto: https' header */
+#define BUFF_RESERVED 1024
+
 /* length of strings (including the terminating '\0' character) */
 /* it can't be lower than 256 bytes or NTLM authentication will break */
 #define STRLEN 256

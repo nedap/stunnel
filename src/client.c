@@ -84,6 +84,12 @@ CLI *alloc_client_session(SERVICE_OPTIONS *opt, int rfd, int wfd) {
         return NULL;
     }
     c->opt=opt;
+    /* some options need space to add some information */
+    if (c->opt->option.xforwardedproto)
+      c->buffsize = BUFFSIZE - BUFF_RESERVED;
+    else
+      c->buffsize = BUFFSIZE;
+    c->crlf_seen=0;
     c->local_rfd.fd=rfd;
     c->local_wfd.fd=wfd;
     return c;
@@ -372,6 +378,28 @@ static void init_ssl(CLI *c) {
     }
 }
 
+/* Moves all data from the buffer <buffer> between positions <start> and <stop>
+ * to insert <string> of length <len>. <start> and <stop> are updated to their
+ * new respective values, and the number of characters inserted is returned.
+ * If <len> is too long, nothing is done and -1 is returned.
+ * Note that neither <string> nor <buffer> can be NULL.
+ */
+static int buffer_insert_with_len(char *buffer, int *start, int *stop, int limit, char *string, int len) {
+    if (len > limit - *stop)
+        return -1;
+    if (*start > *stop)
+        return -1;
+    memmove(buffer + *start + len, buffer + *start, *stop - *start);
+    memcpy(buffer + *start, string, len);
+    *start += len;
+    *stop += len;
+    return len;
+}
+
+static int buffer_insert(char *buffer, int *start, int *stop, int limit, char *string) {
+    return buffer_insert_with_len(buffer, start, stop, limit, string, strlen(string));
+}
+
 /****************************** transfer data */
 static void transfer(CLI *c) {
     int watchdog=0; /* a counter to detect an infinite loop */
@@ -390,7 +418,7 @@ static void transfer(CLI *c) {
     do { /* main loop of client data transfer */
         /****************************** initialize *_wants_* */
         read_wants_read=
-            ssl_open_rd && c->ssl_ptr<BUFFSIZE && !read_wants_write;
+            ssl_open_rd && c->ssl_ptr<c->buffsize && !read_wants_write;
         write_wants_write=
             ssl_open_wr && c->sock_ptr && !write_wants_read;
 
@@ -399,7 +427,7 @@ static void transfer(CLI *c) {
         /* for plain socket open data strem = open file descriptor */
         /* make sure to add each open socket to receive exceptions! */
         if(sock_open_rd)
-            s_poll_add(&c->fds, c->sock_rfd->fd, c->sock_ptr<BUFFSIZE, 0);
+            s_poll_add(&c->fds, c->sock_rfd->fd, c->sock_ptr<c->buffsize, 0);
         if(sock_open_wr)
             s_poll_add(&c->fds, c->sock_wfd->fd, 0, c->ssl_ptr);
         /* for SSL assume that sockets are open if there any pending requests */
@@ -531,7 +559,7 @@ static void transfer(CLI *c) {
         /****************************** read from socket */
         if(sock_open_rd && sock_can_rd) {
             num=readsocket(c->sock_rfd->fd,
-                c->sock_buff+c->sock_ptr, BUFFSIZE-c->sock_ptr);
+                c->sock_buff+c->sock_ptr, c->buffsize-c->sock_ptr);
             switch(num) {
             case -1:
                 parse_socket_error(c, "readsocket");
@@ -567,7 +595,7 @@ static void transfer(CLI *c) {
         /****************************** update *_wants_* based on new *_ptr */
         /* this update is also required for SSL_pending() to be used */
         read_wants_read=
-            ssl_open_rd && c->ssl_ptr<BUFFSIZE && !read_wants_write;
+            ssl_open_rd && c->ssl_ptr<c->buffsize && !read_wants_write;
         write_wants_write=
             ssl_open_wr && c->sock_ptr && !write_wants_read;
 
@@ -577,10 +605,57 @@ static void transfer(CLI *c) {
                  * writesocket() above made some room in c->ssl_buff */
                 (read_wants_write && ssl_can_wr)) {
             read_wants_write=0;
-            num=SSL_read(c->ssl, c->ssl_buff+c->ssl_ptr, BUFFSIZE-c->ssl_ptr);
+            num=SSL_read(c->ssl, c->ssl_buff+c->ssl_ptr, c->buffsize-c->ssl_ptr);
             switch(err=SSL_get_error(c->ssl, num)) {
             case SSL_ERROR_NONE:
-                c->ssl_ptr+=num;
+                if (c->buffsize != BUFFSIZE && c->opt->option.xforwardedproto) {
+                  int last = c->ssl_ptr;
+                  c->ssl_ptr += num;
+                  
+                  /* Look for end of HTTP headers between last and ssl_ptr.
+                   * To achieve this reliably, we have to count the number of
+                   * successive [CR]LF and to memorize it in case it's spread
+                   * over multiple segmments. --WT.
+                   */
+                  while (last < c->ssl_ptr) {
+                    if (c->ssl_buff[last] == '\n') {
+                      if (++c->crlf_seen == 2)
+                        break;
+                    } else if (last < c->ssl_ptr - 1 && 
+                                c->ssl_buff[last] == '\r' &&
+                                c->ssl_buff[last+1] == '\n') {
+                      if (++c->crlf_seen == 2)
+                        break;
+                      last++;
+                    } else if (c->ssl_buff[last] != '\r')
+                      /* don't refuse '\r' because we may get a '\n' on the next read */
+                      c->crlf_seen = 0;
+                    last++;
+                  }
+                  if (c->crlf_seen >= 2) {
+                    /* We have all the HTTP headers now. We don't need to
+                     * reserve any space anymore. <ssl_ptr> points to the
+                     * first byte of unread data, and <last> points to the
+                     * exact location where we want to insert our headers,
+                     * which is right before the empty line.
+                     */
+                     c->buffsize = BUFFSIZE;
+                     
+                     if (c->opt->option.xforwardedproto) {
+                       /* X-Forwarded-Proto: https\r\n\0 */
+                       char xforwproto[] = "X-Forwarded-Proto: https\r\n";
+                       buffer_insert(c->ssl_buff, &last, &c->ssl_ptr,
+                         c->buffsize, xforwproto); 
+                       /* last still points to the \r\n and ssl_ptr to the
+                        * end of the buffer, so way may add as many headers
+                        * as we need to.
+                        */
+                     }
+                  }
+                }
+                else
+                  c->ssl_ptr+=num;
+                  
                 watchdog=0; /* reset watchdog */
                 break;
             case SSL_ERROR_WANT_WRITE:

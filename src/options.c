@@ -794,6 +794,29 @@ static char *parse_service_option(CMD cmd, SERVICE_OPTIONS *section,
         break;
     }
 
+    /* xforwardedproto */
+    switch(cmd) {
+    case CMD_INIT:
+      section->option.xforwardedproto=0;
+      break;
+    case CMD_EXEC:
+      if(strcasecmp(opt, "xforwardedproto"))
+        break;
+      if(!strcasecmp(arg, "yes"))
+        section->option.xforwardedproto=1;
+      else if(!strcasecmp(arg, "no"))
+        section->option.xforwardedproto=0;
+      else
+        return "argument should be either 'yes' or 'no'";
+      return NULL; /* OK */
+    case CMD_DEFAULT:
+      break;
+    case CMD_HELP:
+      s_log(LOG_NOTICE, "%-15s = yes|no append an X-Forwarded-Proto header", 
+        "xforwardedproto");
+      break;
+    }
+
 #ifdef HAVE_OSSL_ENGINE_H
     /* engineNum */
     switch(cmd) {

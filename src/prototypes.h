@@ -171,6 +171,7 @@ typedef struct service_options_struct {
     struct {
         unsigned int client:1;
         unsigned int delayed_lookup:1;
+        unsigned int xforwardedproto:1;
         unsigned int accept:1;
         unsigned int remote:1;
         unsigned int retry:1; /* loop remote+program */
@@ -346,6 +347,8 @@ typedef struct {
     FD *ssl_rfd, *ssl_wfd; /* read and write SSL descriptors */
     int sock_bytes, ssl_bytes; /* bytes written to socket and ssl */
     s_poll_set fds; /* file descriptors */
+    int buffsize; /* current buffer size, may be lower than BUFFSIZE */
+    int crlf_seen; /* the number of successive CRLF seen */
 } CLI;
 
 extern int max_fds, max_clients;
